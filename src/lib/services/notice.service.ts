@@ -363,25 +363,21 @@ export async function generateNotices(
   request: NoticeGenerationRequest,
   userId: string
 ): Promise<NoticeGenerationResponse> {
-  const results: NoticeGenerationResult[] = [];
+  // Generate notices in parallel for better performance
+  const promises = request.accountIds
+    .filter((accountId): accountId is string => !!accountId)
+    .map((accountId, i) => {
+      const recipientId = request.recipientIds?.[i];
+      return generateNoticeForAccount(
+        request.noticeTypeId,
+        accountId,
+        request.deliveryMethod,
+        userId,
+        recipientId
+      );
+    });
 
-  for (let i = 0; i < request.accountIds.length; i++) {
-    const accountId = request.accountIds[i];
-    if (!accountId) continue;
-
-    const recipientId = request.recipientIds?.[i];
-
-    const result = await generateNoticeForAccount(
-      request.noticeTypeId,
-      accountId,
-      request.deliveryMethod,
-      userId,
-      recipientId
-    );
-
-    results.push(result);
-  }
-
+  const results = await Promise.all(promises);
   const successful = results.filter((r) => r.success).length;
 
   return {
@@ -790,7 +786,8 @@ export async function getAccountsForNoticeSelection(
     noticeTypeCode?: NoticeTypeCode;
   },
   page = 1,
-  pageSize = 50
+  pageSize = 50,
+  idsOnly = false
 ): Promise<{ accounts: AccountForNotice[]; total: number }> {
   // Build base query - we'll do additional filtering in memory for complex date logic
   const where: Record<string, unknown> = {};
@@ -894,6 +891,20 @@ export async function getAccountsForNoticeSelection(
     (page - 1) * pageSize,
     page * pageSize
   );
+
+  // For idsOnly mode, return minimal data (just id) for efficiency
+  if (idsOnly) {
+    return {
+      accounts: paginatedAccounts.map((a) => ({
+        id: a.id,
+        mailboxNumber: a.mailbox.number,
+        status: a.status,
+        nextRenewalDate: a.nextRenewalDate.toISOString(),
+        primaryRecipient: null,
+      })),
+      total,
+    };
+  }
 
   return {
     accounts: paginatedAccounts.map((a) => {

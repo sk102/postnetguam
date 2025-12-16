@@ -40,6 +40,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         ? (noticeTypeCodeParam as NoticeTypeCode)
         : undefined;
 
+    // Check if we only need IDs (for Select All functionality)
+    const idsOnly = searchParams.get('idsOnly') === 'true';
+
     // Parse pagination
     const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
     const pageSize = Math.min(
@@ -60,9 +63,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const result = await getAccountsForNoticeSelection(
       filter,
-      page,
-      pageSize
+      idsOnly ? 1 : page,
+      idsOnly ? 10000 : pageSize, // Return all IDs when idsOnly=true (max 10k)
+      idsOnly // Pass flag to return minimal data
     );
+
+    // If idsOnly, return just the IDs array
+    if (idsOnly) {
+      return NextResponse.json({
+        ids: result.accounts.map((a) => a.id),
+        total: result.total,
+      });
+    }
 
     return NextResponse.json({
       data: result.accounts,

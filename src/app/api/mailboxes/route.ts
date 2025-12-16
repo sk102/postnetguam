@@ -92,11 +92,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const currentAccount = mailbox.accounts[0];
       const recipients = currentAccount?.recipients ?? [];
 
-      // Split recipients by type
-      const personRecipients = recipients
+      // Find primary recipient (account holder)
+      const primary = recipients.find((r) => r.isPrimary) ?? recipients[0];
+      const accountHolder = primary ? {
+        name: formatRecipientName(primary),
+        type: primary.recipientType as 'PERSON' | 'BUSINESS',
+      } : null;
+
+      // Split NON-PRIMARY recipients by type (exclude primary from these lists)
+      const nonPrimaryRecipients = recipients.filter((r) => !r.isPrimary);
+      const personRecipients = nonPrimaryRecipients
         .filter((r) => r.recipientType === 'PERSON')
         .map((r) => formatRecipientName(r));
-      const businessRecipients = recipients
+      const businessRecipients = nonPrimaryRecipients
         .filter((r) => r.recipientType === 'BUSINESS')
         .map((r) => ({
           name: r.businessName ?? 'Unknown Business',
@@ -104,7 +112,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         }));
 
       // For sorting, use primary recipient name
-      const primary = recipients.find((r) => r.isPrimary) ?? recipients[0];
       const accountName = primary ? formatRecipientName(primary) : null;
 
       return {
@@ -112,6 +119,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         number: mailbox.number,
         status: mailbox.status,
         accountName, // Keep for sorting
+        accountHolder,
         personRecipients,
         businessRecipients,
         recipientCount: recipients.length,

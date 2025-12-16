@@ -15,6 +15,7 @@ datasource db {
 
 enum MailboxStatus {
   AVAILABLE
+  RESERVED
   ACTIVE
   HOLD
   CLOSED
@@ -67,6 +68,28 @@ enum AuditAction {
   CREATE
   UPDATE
   DELETE
+}
+
+enum InvoiceType {
+  NEW_ACCOUNT
+  RENEWAL
+  PRORATION
+}
+
+enum InvoiceStatus {
+  PENDING
+  PARTIAL
+  PAID
+}
+
+enum InvoiceLineType {
+  BASE_RATE
+  BUSINESS_FEE
+  ADDITIONAL_RECIPIENT_4TH
+  ADDITIONAL_RECIPIENT_5TH
+  ADDITIONAL_RECIPIENT_6TH
+  ADDITIONAL_RECIPIENT_7TH
+  MINOR_FEE
 }
 
 enum SmsStatus {
@@ -150,6 +173,7 @@ model Account {
   rateOverrideBy User?       @relation("RateOverrideBy", fields: [rateOverrideById], references: [id])
   recipients     Recipient[]
   payments       Payment[]
+  invoices       Invoice[]
   reminders      Reminder[]
   smsLogs        SmsLog[]
   memos          Memo[]
@@ -159,6 +183,10 @@ model Account {
   @@index([status])
   @@index([nextRenewalDate])
   @@index([auditFlag])
+  // Compound indexes for common query patterns
+  @@index([status, nextRenewalDate])  // Renewal filtering (e.g., ACTIVE accounts due soon)
+  @@index([mailboxId, status])        // Mailbox queries with status filter
+  @@index([updatedAt])                // Change tracking queries
   @@map("accounts")
 }
 
@@ -286,6 +314,7 @@ model EmailAddress {
 model Payment {
   id            String        @id @default(uuid())
   accountId     String        @map("account_id")
+  invoiceId     String?       @map("invoice_id")
   amount        Decimal       @db.Decimal(10, 2)
   paymentDate   DateTime      @map("payment_date") @db.Date
   paymentMethod PaymentMethod @map("payment_method")
@@ -296,12 +325,62 @@ model Payment {
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
 
-  account        Account @relation(fields: [accountId], references: [id])
-  recordedByUser User    @relation(fields: [recordedBy], references: [id])
+  account        Account  @relation(fields: [accountId], references: [id])
+  invoice        Invoice? @relation(fields: [invoiceId], references: [id])
+  recordedByUser User     @relation(fields: [recordedBy], references: [id])
 
   @@index([accountId])
+  @@index([invoiceId])
   @@index([paymentDate])
   @@map("payments")
+}
+
+model Invoice {
+  id              String        @id @default(uuid())
+  accountId       String        @map("account_id")
+  invoiceNumber   Int           @unique @default(autoincrement()) @map("invoice_number")
+  invoiceDate     DateTime      @map("invoice_date") @db.Date
+  invoiceType     InvoiceType   @map("invoice_type")
+  status          InvoiceStatus @default(PENDING)
+  renewalPeriod   RenewalPeriod @map("renewal_period")
+  periodStart     DateTime      @map("period_start") @db.Date
+  periodEnd       DateTime      @map("period_end") @db.Date
+  periodMonths    Int           @map("period_months")
+  subtotal        Decimal       @db.Decimal(10, 2)
+  totalAmount     Decimal       @map("total_amount") @db.Decimal(10, 2)
+  paidAmount      Decimal       @default(0) @map("paid_amount") @db.Decimal(10, 2)
+  createdById     String?       @map("created_by_id")
+  notes           String?       @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  account         Account           @relation(fields: [accountId], references: [id])
+  createdBy       User?             @relation("InvoiceCreator", fields: [createdById], references: [id])
+  lineItems       InvoiceLineItem[]
+  payments        Payment[]
+
+  @@index([accountId])
+  @@index([invoiceDate])
+  @@index([status])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id              String          @id @default(uuid())
+  invoiceId       String          @map("invoice_id")
+  lineType        InvoiceLineType @map("line_type")
+  description     String
+  quantity        Int             @default(1)
+  unitPrice       Decimal         @map("unit_price") @db.Decimal(10, 2)
+  months          Decimal         @db.Decimal(10, 2)
+  totalAmount     Decimal         @map("total_amount") @db.Decimal(10, 2)
+  sortOrder       Int             @default(0) @map("sort_order")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  invoice         Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_line_items")
 }
 
 model Reminder {
@@ -363,6 +442,7 @@ model User {
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
   payments           Payment[]
+  createdInvoices    Invoice[]           @relation("InvoiceCreator")
   auditLogs          AuditLog[]
   createdReminders   Reminder[]          @relation("ReminderCreator")
   dismissedReminders Reminder[]          @relation("ReminderDismisser")

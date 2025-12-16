@@ -15,6 +15,7 @@ export const RENEWAL_WARNING_DAYS = 30;
 
 export const MAILBOX_STATUS_LABELS = {
   AVAILABLE: 'Available',
+  RESERVED: 'Reserved',
   ACTIVE: 'Active',
   HOLD: 'Hold',
   CLOSED: 'Closed',

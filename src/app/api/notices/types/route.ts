@@ -21,7 +21,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const includeInactive = searchParams.get('includeInactive') === 'true';
 
     const noticeTypes = await getAllNoticeTypes(includeInactive);
-    return NextResponse.json({ data: noticeTypes });
+
+    // Cache notice types for 5 minutes (they rarely change)
+    return NextResponse.json(
+      { data: noticeTypes },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
+        },
+      }
+    );
   } catch (error) {
     console.error('Notice types list API error:', error);
     return NextResponse.json(

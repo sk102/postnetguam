@@ -193,3 +193,37 @@ export function isPast(date: Date): boolean {
 export function isFuture(date: Date): boolean {
   return isAfter(date, getToday());
 }
+
+/**
+ * Get comprehensive age information for a person
+ * Useful for recipient display in UI
+ */
+export interface AgeInfo {
+  age: number;
+  isMinor: boolean;
+  isTurningAdultSoon: boolean;
+  daysUntil18: number | null;
+}
+
+export function getAgeInfo(birthdate: Date | string): AgeInfo {
+  const birth = typeof birthdate === 'string' ? parseISO(birthdate) : birthdate;
+  const today = getToday();
+  const age = differenceInYears(today, birth);
+  const isMinorFlag = age < 18;
+
+  let isTurningAdultSoon = false;
+  let daysUntil18: number | null = null;
+
+  if (isMinorFlag) {
+    const eighteenthBirthday = get18thBirthday(birth);
+    daysUntil18 = differenceInDays(eighteenthBirthday, today);
+    isTurningAdultSoon = daysUntil18 >= 0 && daysUntil18 <= VERIFICATION.DAYS_BEFORE_18TH_BIRTHDAY;
+  }
+
+  return {
+    age,
+    isMinor: isMinorFlag,
+    isTurningAdultSoon,
+    daysUntil18,
+  };
+}

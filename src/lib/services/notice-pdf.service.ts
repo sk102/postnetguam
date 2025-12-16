@@ -362,7 +362,6 @@ interface NoticePdfDocumentProps {
   storeName: string;
   storeAddress: string;
   storePhone: string;
-  generatedDate: string;
 }
 
 /**
@@ -373,7 +372,6 @@ function NoticePdfDocument({
   storeName,
   storeAddress,
   storePhone,
-  generatedDate: _generatedDate,
 }: NoticePdfDocumentProps): React.ReactElement {
   const elements = parseMarkdownToPdfElements(content);
 
@@ -503,14 +501,14 @@ export async function generateNoticePdf(
   storeName: string,
   storeAddress: string,
   storePhone: string,
-  generatedDate: string
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _generatedDate: string // kept for API compatibility but no longer used in PDF
 ): Promise<Buffer> {
   const document = NoticePdfDocument({
     content: markdownContent,
     storeName,
     storeAddress,
     storePhone,
-    generatedDate,
   });
 
   const buffer = await renderToBuffer(document);

@@ -45,6 +45,7 @@ export function NoticeGenerateDialog({
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
   const [deliveryMethod, setDeliveryMethod] = useState<NoticeDeliveryMethod>('PRINT');
   const [loading, setLoading] = useState(false);
+  const [loadingAllIds, setLoadingAllIds] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<NoticeGenerationResponse | null>(null);
   const [search, setSearch] = useState('');
@@ -52,6 +53,7 @@ export function NoticeGenerateDialog({
   const [renewalDueSoon, setRenewalDueSoon] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalAccounts, setTotalAccounts] = useState(0);
 
   // Check if this notice type has smart filtering
   const hasSmartFiltering = noticeType
@@ -90,6 +92,7 @@ export function NoticeGenerateDialog({
         const data = await response.json();
         setAccounts(data.data);
         setTotalPages(data.pagination.totalPages);
+        setTotalAccounts(data.pagination.total);
       }
     } catch (err) {
       console.error('Failed to fetch accounts:', err);
@@ -125,8 +128,38 @@ export function NoticeGenerateDialog({
     });
   };
 
-  const selectAll = (): void => {
-    setSelectedAccountIds(new Set(accounts.map((a) => a.id)));
+  // Fetch all account IDs for Select All functionality
+  const selectAll = async (): Promise<void> => {
+    if (!noticeType) return;
+
+    setLoadingAllIds(true);
+    try {
+      const params = new URLSearchParams({
+        idsOnly: 'true',
+      });
+
+      // Pass the same filters
+      params.set('noticeTypeCode', noticeType.code);
+      if (!hasSmartFiltering) {
+        if (search) params.set('search', search);
+        if (statusFilter) params.set('status', statusFilter);
+        if (renewalDueSoon) params.set('renewalDueSoon', 'true');
+      } else {
+        if (search) params.set('search', search);
+      }
+
+      const response = await fetch(`/api/notices/accounts?${params}`);
+      if (response.ok) {
+        const data = await response.json() as { ids: string[]; total: number };
+        setSelectedAccountIds(new Set(data.ids));
+      }
+    } catch (err) {
+      console.error('Failed to fetch all account IDs:', err);
+      // Fallback to selecting current page only
+      setSelectedAccountIds(new Set(accounts.map((a) => a.id)));
+    } finally {
+      setLoadingAllIds(false);
+    }
   };
 
   const deselectAll = (): void => {
@@ -311,14 +344,18 @@ export function NoticeGenerateDialog({
               <div className="flex items-center justify-between">
                 <p className="text-sm text-gray-600">
                   {selectedAccountIds.size} account(s) selected
+                  {totalAccounts > 0 && selectedAccountIds.size !== totalAccounts && (
+                    <span className="text-gray-400"> of {totalAccounts}</span>
+                  )}
                 </p>
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={selectAll}
-                    className="text-sm text-postnet-red hover:underline"
+                    onClick={() => void selectAll()}
+                    disabled={loadingAllIds}
+                    className="text-sm text-postnet-red hover:underline disabled:opacity-50"
                   >
-                    Select All
+                    {loadingAllIds ? 'Loading...' : 'Select All'}
                   </button>
                   <button
                     type="button"

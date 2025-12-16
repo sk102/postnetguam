@@ -5,6 +5,8 @@ import { prisma } from '@/lib/db/prisma';
 import { Prisma } from '@prisma/client';
 import { formatRecipientName, buildRecipientNameSearch } from '@/lib/utils/recipient';
 import { RENEWAL_WARNING_DAYS, type DisplayAccountStatus } from '@/constants/status';
+import { InvoiceService } from '@/lib/services/invoice.service';
+import { PricingService } from '@/lib/services/pricing.service';
 
 type SortField = 'mailboxNumber' | 'name' | 'status' | 'nextRenewalDate';
 
@@ -115,9 +117,26 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       where,
       orderBy,
       include: {
-        mailbox: true,
+        mailbox: {
+          select: { number: true },
+        },
         recipients: {
           where: { removedDate: null },
+          // Only select fields needed for list display (performance optimization)
+          select: {
+            id: true,
+            isPrimary: true,
+            recipientType: true,
+            firstName: true,
+            middleName: true,
+            lastName: true,
+            personAlias: true,
+            businessName: true,
+            businessAlias: true,
+            idVerifiedDate: true,
+            idExpirationDate: true,
+          },
+          orderBy: [{ isPrimary: 'desc' as const }, { createdAt: 'asc' as const }],
         },
       },
     };
@@ -126,10 +145,29 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ? findManyArgs
       : { ...findManyArgs, skip, take: limit };
 
-    const [accounts, total] = await Promise.all([
+    const [accounts, total, unpaidInvoices] = await Promise.all([
       prisma.account.findMany(paginatedArgs),
       prisma.account.count({ where }),
+      // Get unpaid invoices to determine which accounts have outstanding balances
+      prisma.invoice.findMany({
+        where: {
+          status: { in: ['PENDING', 'PARTIAL'] },
+        },
+        select: {
+          accountId: true,
+          totalAmount: true,
+          paidAmount: true,
+        },
+      }),
     ]);
+
+    // Build a map of accountId -> total balance due
+    const balanceDueByAccount = new Map<string, number>();
+    for (const invoice of unpaidInvoices) {
+      const balanceDue = Number(invoice.totalAmount) - Number(invoice.paidAmount);
+      const existing = balanceDueByAccount.get(invoice.accountId) ?? 0;
+      balanceDueByAccount.set(invoice.accountId, existing + balanceDue);
+    }
 
     let data = accounts.map((account) => {
       const primary = account.recipients.find((r) => r.isPrimary) ?? account.recipients[0];
@@ -174,6 +212,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         recipientCount: account.recipients.length,
         auditFlag: account.auditFlag,
         needsIdUpdate,
+        balanceDue: balanceDueByAccount.get(account.id) ?? 0,
       };
     });
 
@@ -242,19 +281,6 @@ function calculateNextRenewalDate(startDate: Date, period: string): Date {
   return next;
 }
 
-function calculateTotalRate(monthlyRate: number, period: string): number {
-  switch (period) {
-    case 'THREE_MONTH':
-      return monthlyRate * 3;
-    case 'SIX_MONTH':
-      return monthlyRate * 6;
-    case 'TWELVE_MONTH':
-      return monthlyRate * 12; // Pay for 12, get 13
-    default:
-      return monthlyRate * 3;
-  }
-}
-
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const session = await getServerSession(authOptions);
@@ -306,7 +332,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Calculate dates and rates
     const startDate = body.startDate ? new Date(body.startDate) : new Date();
     const nextRenewalDate = calculateNextRenewalDate(startDate, body.renewalPeriod);
-    const currentRate = calculateTotalRate(body.monthlyRate, body.renewalPeriod);
+    // Store the monthly rate as currentRate (not the total for the period)
+    const currentRate = body.monthlyRate;
 
     // Create account with recipient in a transaction
     const account = await prisma.$transaction(async (tx) => {
@@ -373,17 +400,61 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
       }
 
-      // Update mailbox status to ACTIVE
+      // Update mailbox status to RESERVED (will become ACTIVE after first payment)
       await tx.mailbox.update({
         where: { id: body.mailboxId },
-        data: { status: 'ACTIVE' },
+        data: { status: 'RESERVED' },
       });
 
-      return newAccount;
+      return { account: newAccount, recipient: newRecipient };
     });
 
+    // Create invoice for the new account
+    const userId = session.user?.id ?? null;
+    const rates = await PricingService.getRatesForDate(startDate);
+
+    if (rates) {
+      // Analyze recipients to get counts
+      const recipientAnalysis = PricingService.analyzeRecipients([{
+        recipientType: recipient.recipientType,
+        birthdate: recipient.birthdate ? new Date(recipient.birthdate) : null,
+      }]);
+
+      // Calculate price breakdown
+      const priceBreakdown = PricingService.calculatePriceBreakdown(rates, {
+        renewalPeriod: body.renewalPeriod,
+        adultRecipientCount: recipientAnalysis.adultCount,
+        minorRecipientCount: recipientAnalysis.minorCount,
+        hasBusinessRecipient: recipientAnalysis.hasBusinessRecipient,
+      });
+
+      // Create the invoice
+      await InvoiceService.createInvoiceFromBreakdown(
+        account.account.id,
+        'NEW_ACCOUNT',
+        priceBreakdown,
+        {
+          invoiceDate: startDate,
+          periodStart: startDate,
+          periodEnd: nextRenewalDate,
+          renewalPeriod: body.renewalPeriod,
+        },
+        {
+          baseRateMonthly: currentRate,
+          businessFeeMonthly: Number(rates.businessAccountFee),
+          rate4thAdult: Number(rates.rate4thAdult),
+          rate5thAdult: Number(rates.rate5thAdult),
+          rate6thAdult: Number(rates.rate6thAdult),
+          rate7thAdult: Number(rates.rate7thAdult),
+          minorFeeMonthly: Number(rates.minorRecipientFee),
+        },
+        recipientAnalysis,
+        userId
+      );
+    }
+
     return NextResponse.json({
-      id: account.id,
+      id: account.account.id,
       mailboxNumber: mailbox.number,
     }, { status: 201 });
 

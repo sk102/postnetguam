@@ -108,30 +108,26 @@ function NewAccountForm(): React.ReactElement {
     void fetchMailboxes();
   }, []);
 
-  // Calculate pricing when recipient type, renewal period, or birthdate changes
+  // Calculate pricing when renewal period or birthdate changes
   const calculatePricing = useCallback(async (): Promise<void> => {
     setIsCalculatingRate(true);
     try {
-      // Determine recipient counts
+      // Determine recipient counts (primary is always a person)
       let adultRecipientCount = 0;
       let minorRecipientCount = 0;
-      const hasBusinessRecipient = formData.recipientType === 'BUSINESS';
 
-      if (formData.recipientType === 'PERSON') {
-        // Check if minor based on birthdate
-        if (formData.birthdate) {
-          const birthdateObj = new Date(formData.birthdate);
-          if (checkIsMinor(birthdateObj)) {
-            minorRecipientCount = 1;
-          } else {
-            adultRecipientCount = 1;
-          }
+      // Check if minor based on birthdate
+      if (formData.birthdate) {
+        const birthdateObj = new Date(formData.birthdate);
+        if (checkIsMinor(birthdateObj)) {
+          minorRecipientCount = 1;
         } else {
-          // No birthdate = assume adult
           adultRecipientCount = 1;
         }
+      } else {
+        // No birthdate = assume adult
+        adultRecipientCount = 1;
       }
-      // For BUSINESS: first business doesn't count toward adult total, just triggers business fee
 
       const res = await fetch('/api/pricing/calculate', {
         method: 'POST',
@@ -140,7 +136,7 @@ function NewAccountForm(): React.ReactElement {
           renewalPeriod: formData.renewalPeriod,
           adultRecipientCount,
           minorRecipientCount,
-          hasBusinessRecipient,
+          hasBusinessRecipient: false, // Primary recipient is always a person
         }),
       });
 
@@ -163,7 +159,7 @@ function NewAccountForm(): React.ReactElement {
     } finally {
       setIsCalculatingRate(false);
     }
-  }, [formData.recipientType, formData.renewalPeriod, formData.birthdate, isRateOverridden]);
+  }, [formData.renewalPeriod, formData.birthdate, isRateOverridden]);
 
   useEffect(() => {
     void calculatePricing();
@@ -325,115 +321,58 @@ function NewAccountForm(): React.ReactElement {
             )}
           </section>
 
-          {/* Primary Recipient */}
+          {/* Primary Recipient (always a person) */}
           <section className="bg-white rounded-lg border p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Primary Recipient</h2>
 
-            {/* Type Selector */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="recipientType"
-                    value="PERSON"
-                    checked={formData.recipientType === 'PERSON'}
-                    onChange={() => setFormData({ ...formData, recipientType: 'PERSON' })}
-                    className="text-postnet-red focus:ring-postnet-red"
-                  />
-                  <span className="text-sm">Person</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="recipientType"
-                    value="BUSINESS"
-                    checked={formData.recipientType === 'BUSINESS'}
-                    onChange={() => setFormData({ ...formData, recipientType: 'BUSINESS' })}
-                    className="text-postnet-red focus:ring-postnet-red"
-                  />
-                  <span className="text-sm">Business</span>
-                </label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">First Name *</label>
+                <input
+                  type="text"
+                  value={formData.firstName}
+                  onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Middle Name</label>
+                <input
+                  type="text"
+                  value={formData.middleName}
+                  onChange={(e) => setFormData({ ...formData, middleName: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Last Name</label>
+                <input
+                  type="text"
+                  value={formData.lastName}
+                  onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Alias / Nickname</label>
+                <input
+                  type="text"
+                  value={formData.personAlias}
+                  onChange={(e) => setFormData({ ...formData, personAlias: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Birthdate</label>
+                <input
+                  type="date"
+                  value={formData.birthdate}
+                  onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
               </div>
             </div>
-
-            {/* Person Fields */}
-            {formData.recipientType === 'PERSON' && (
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">First Name *</label>
-                  <input
-                    type="text"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Middle Name</label>
-                  <input
-                    type="text"
-                    value={formData.middleName}
-                    onChange={(e) => setFormData({ ...formData, middleName: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Last Name</label>
-                  <input
-                    type="text"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Alias / Nickname</label>
-                  <input
-                    type="text"
-                    value={formData.personAlias}
-                    onChange={(e) => setFormData({ ...formData, personAlias: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">Birthdate</label>
-                  <input
-                    type="date"
-                    value={formData.birthdate}
-                    onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Business Fields */}
-            {formData.recipientType === 'BUSINESS' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Business Name *</label>
-                  <input
-                    type="text"
-                    value={formData.businessName}
-                    onChange={(e) => setFormData({ ...formData, businessName: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">DBA / Alias</label>
-                  <input
-                    type="text"
-                    value={formData.businessAlias}
-                    onChange={(e) => setFormData({ ...formData, businessAlias: e.target.value })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
-                  />
-                </div>
-              </div>
-            )}
 
             {/* Contact Info */}
             <div className="mt-4 pt-4 border-t grid grid-cols-2 gap-4">
@@ -502,7 +441,7 @@ function NewAccountForm(): React.ReactElement {
                   {isCalculatingRate && <span className="ml-2 text-gray-400">(calculating...)</span>}
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                  <span className={`absolute left-3 top-1/2 -translate-y-1/2 ${!isRateOverridden ? 'text-gray-400' : 'text-gray-600'}`}>$</span>
                   <input
                     type="number"
                     step="0.01"
@@ -510,11 +449,11 @@ function NewAccountForm(): React.ReactElement {
                     value={formData.monthlyRate}
                     onChange={(e) => setFormData({ ...formData, monthlyRate: e.target.value })}
                     className={`w-full rounded-md border pl-7 pr-3 py-2 text-sm ${
-                      !isManager && !isRateOverridden ? 'bg-gray-50' : ''
+                      !isRateOverridden ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''
                     }`}
                     placeholder="0.00"
                     required
-                    readOnly={!isManager && !isRateOverridden}
+                    disabled={!isRateOverridden}
                   />
                 </div>
                 {/* Manager override toggle */}
@@ -569,11 +508,19 @@ function NewAccountForm(): React.ReactElement {
                     </div>
                   )}
                   <div className="flex justify-between items-center">
-                    <span className="text-gray-600">Total for {months} months:</span>
+                    <div>
+                      <span className="text-gray-600">Total for {months} months:</span>
+                      {formData.renewalPeriod === 'TWELVE_MONTH' && (
+                        <span className="text-green-600 text-xs ml-2">(+1 free month)</span>
+                      )}
+                    </div>
                     <span className="font-semibold">${totalRate.toFixed(2)}</span>
                   </div>
-                  {formData.renewalPeriod === 'TWELVE_MONTH' && (
-                    <span className="text-green-600 text-xs">(+1 free month)</span>
+                  {formData.renewalPeriod === 'TWELVE_MONTH' && totalRate > 0 && (
+                    <div className="flex justify-between text-xs text-gray-500">
+                      <span>Effective monthly rate (13 mo):</span>
+                      <span className="font-mono">${(totalRate / 13).toFixed(2)}/mo</span>
+                    </div>
                   )}
                   {isRateOverridden && calculatedRate && (
                     <div className="text-xs text-amber-600 mt-1">

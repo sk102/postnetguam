@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState, useRef, useCallback } from 'react';
+import { Suspense, useEffect, useState, useRef, useCallback, memo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { AppLayout } from '@/components/layout';
 import { format } from 'date-fns';
@@ -20,6 +20,7 @@ interface Account {
   recipientCount: number;
   auditFlag: boolean;
   needsIdUpdate: boolean;
+  balanceDue: number;
 }
 
 interface PaginationInfo {
@@ -41,7 +42,7 @@ function formatRenewalPeriod(period: string): string {
   }
 }
 
-function StatusBadge({ status }: { status: string }): React.ReactElement {
+const StatusBadge = memo(function StatusBadge({ status }: { status: string }): React.ReactElement {
   const colors = {
     ACTIVE: 'bg-status-active/10 text-status-active',
     RENEWAL: 'bg-status-renewal/10 text-status-renewal',
@@ -53,14 +54,14 @@ function StatusBadge({ status }: { status: string }): React.ReactElement {
       {status}
     </span>
   );
-}
+});
 
-function SortIcon({ field, sortField, sortOrder }: { field: SortField; sortField: SortField; sortOrder: SortOrder }): React.ReactElement {
+const SortIcon = memo(function SortIcon({ field, sortField, sortOrder }: { field: SortField; sortField: SortField; sortOrder: SortOrder }): React.ReactElement {
   if (field !== sortField) {
     return <span className="ml-1 text-gray-300">↕</span>;
   }
   return <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>;
-}
+});
 
 function parseSearchInput(input: string): { search: string; status: string | null } {
   const statusMatch = input.match(/status:(\w+)/i);
@@ -368,6 +369,14 @@ function AccountsTableContent(): React.ReactElement {
                           </svg>
                         </span>
                       )}
+                      {account.balanceDue > 0 && (
+                        <span
+                          className="mr-1 text-red-500 font-bold"
+                          title={`Outstanding balance: $${account.balanceDue.toFixed(2)}`}
+                        >
+                          $
+                        </span>
+                      )}
                       {account.mailboxNumber}
                     </span>
                     <StatusBadge status={account.status} />
@@ -492,6 +501,14 @@ function AccountsTableContent(): React.ReactElement {
                           <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                             <path fillRule="evenodd" d="M3 6a3 3 0 013-3h10a1 1 0 01.8 1.6L14.25 8l2.55 3.4A1 1 0 0116 13H6a1 1 0 00-1 1v3a1 1 0 11-2 0V6z" clipRule="evenodd" />
                           </svg>
+                        </span>
+                      )}
+                      {account.balanceDue > 0 && (
+                        <span
+                          className="text-red-500 font-bold"
+                          title={`Outstanding balance: $${account.balanceDue.toFixed(2)}`}
+                        >
+                          $
                         </span>
                       )}
                       {account.mailboxNumber}

@@ -13,13 +13,19 @@ interface BusinessRecipient {
   alias: string | null;
 }
 
+interface AccountHolder {
+  name: string;
+  type: 'PERSON' | 'BUSINESS';
+}
+
 interface Mailbox {
   id: string;
   number: number;
   status: string;
   accountName: string | null; // Used for sorting
-  personRecipients: string[];
-  businessRecipients: BusinessRecipient[];
+  accountHolder: AccountHolder | null;
+  personRecipients: string[]; // Non-primary persons
+  businessRecipients: BusinessRecipient[]; // Non-primary businesses
   recipientCount: number;
   auditFlag: boolean;
   accountStatus: string | null;
@@ -252,7 +258,7 @@ function MailboxesTable(): React.ReactElement {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-postnet-gray-light align-bottom">
             <tr>
-              <th className="w-10 px-2 py-3">
+              <th className="w-14 px-3 py-3 text-center">
                 <span className="sr-only">Select</span>
               </th>
               <th
@@ -273,21 +279,27 @@ function MailboxesTable(): React.ReactElement {
                 onClick={() => handleSort('accountName')}
                 className="cursor-pointer px-4 py-3 text-left text-xs font-medium uppercase text-postnet-gray hover:bg-gray-200 transition-colors"
               >
-                Recipients
+                Account Holder
                 <SortIcon field="accountName" sortField={sortField} sortOrder={sortOrder} />
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-postnet-gray">
+                Persons
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-postnet-gray">
+                Businesses
               </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                   Loading...
                 </td>
               </tr>
             ) : mailboxes.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                   No mailboxes found
                 </td>
               </tr>
@@ -301,7 +313,7 @@ function MailboxesTable(): React.ReactElement {
                     className="hover:bg-gray-50 cursor-pointer"
                   >
                     <td
-                      className={`px-2 py-3 align-top ${hasAccount ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                      className={`px-3 py-3 align-top text-center ${hasAccount ? 'cursor-pointer hover:bg-blue-50' : ''}`}
                       onClick={hasAccount ? (e) => handleCheckboxClick(e, mailbox) : undefined}
                     >
                       {hasAccount && (
@@ -331,20 +343,40 @@ function MailboxesTable(): React.ReactElement {
                     <td className="whitespace-nowrap px-4 py-3 align-top text-sm">
                       <StatusBadge status={mailbox.status} />
                     </td>
+                    {/* Account Holder */}
+                    <td className="px-4 py-3 align-top text-sm">
+                      {mailbox.accountHolder ? (
+                        <span className={mailbox.accountHolder.type === 'BUSINESS' ? 'text-blue-700 font-medium' : 'text-gray-900'}>
+                          {mailbox.accountHolder.name}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </td>
+                    {/* Persons (non-primary) */}
                     <td className="px-4 py-3 align-top text-xs text-gray-700">
-                      {(mailbox.personRecipients.length > 0 || mailbox.businessRecipients.length > 0) ? (
+                      {mailbox.personRecipients.length > 0 ? (
                         <div className="space-y-0.5">
-                          {[...mailbox.businessRecipients]
-                            .sort((a, b) => a.name.localeCompare(b.name))
-                            .map((business, i) => (
-                              <div key={`b-${i}`} className="text-blue-700">
-                                <BusinessNameDisplay name={business.name} alias={business.alias} />
-                              </div>
-                            ))}
                           {[...mailbox.personRecipients]
                             .sort((a, b) => a.localeCompare(b))
                             .map((name, i) => (
                               <div key={`p-${i}`}>{name}</div>
+                            ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </td>
+                    {/* Businesses (non-primary) */}
+                    <td className="px-4 py-3 align-top text-xs text-blue-700">
+                      {mailbox.businessRecipients.length > 0 ? (
+                        <div className="space-y-0.5">
+                          {[...mailbox.businessRecipients]
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map((business, i) => (
+                              <div key={`b-${i}`}>
+                                <BusinessNameDisplay name={business.name} alias={business.alias} />
+                              </div>
                             ))}
                         </div>
                       ) : (

@@ -105,13 +105,18 @@ function getAdditionalAdultFeeForPosition(rates: PriceConfig, position: number):
  */
 export const PricingService = {
   /**
-   * Get the current effective rates (rate with endDate = null, or most recent startDate <= now)
+   * Get the current effective rates (rate with endDate = null AND startDate <= now)
    */
   async getCurrentRates(): Promise<PriceConfig | null> {
-    // First try to find the current rate (endDate is null)
+    const now = new Date();
+
+    // Find the current rate: endDate is null AND startDate has already passed
     const currentRate = await prisma.rateHistory.findFirst({
       where: {
         endDate: null,
+        startDate: {
+          lte: now,
+        },
       },
       orderBy: {
         startDate: 'desc',
@@ -121,7 +126,6 @@ export const PricingService = {
     if (currentRate) return currentRate;
 
     // Fallback: find most recent rate where startDate <= now
-    const now = new Date();
     const rate = await prisma.rateHistory.findFirst({
       where: {
         startDate: {

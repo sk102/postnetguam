@@ -26,7 +26,12 @@ export async function GET(): Promise<Response> {
       return notFoundResponse('Pricing configuration');
     }
 
-    return successResponse(PricingService.serializePriceConfig(currentRates));
+    // Cache pricing for 5 minutes (rarely changes)
+    return successResponse(
+      PricingService.serializePriceConfig(currentRates),
+      200,
+      { 'Cache-Control': 'private, max-age=300, stale-while-revalidate=600' }
+    );
   } catch (error) {
     console.error('Pricing API GET error:', error);
     return internalErrorResponse('Failed to fetch pricing');

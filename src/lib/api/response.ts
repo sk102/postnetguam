@@ -29,8 +29,16 @@ export interface ApiPaginatedResponse<T> {
 
 export type ApiResponse<T> = ApiSuccessResponse<T> | ApiErrorResponse;
 
-export function successResponse<T>(data: T, status = 200): NextResponse<ApiSuccessResponse<T>> {
-  return NextResponse.json({ success: true, data }, { status });
+export function successResponse<T>(
+  data: T,
+  status = 200,
+  headers?: Record<string, string>
+): NextResponse<ApiSuccessResponse<T>> {
+  const init: ResponseInit = { status };
+  if (headers) {
+    init.headers = headers;
+  }
+  return NextResponse.json({ success: true, data }, init);
 }
 
 export function errorResponse(

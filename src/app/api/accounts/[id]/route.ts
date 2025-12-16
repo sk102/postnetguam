@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth/options';
 import { prisma } from '@/lib/db/prisma';
 import { formatRecipientName } from '@/lib/utils/recipient';
 import { PricingService } from '@/lib/services/pricing.service';
+import { InvoiceService } from '@/lib/services/invoice.service';
+import type { CreateInvoiceLineItemInput } from '@/types/invoice';
 
 interface RouteParams {
   params: { id: string };
@@ -56,6 +58,61 @@ export async function GET(
     const phoneNumbers = primaryRecipient?.contactCard?.phoneNumbers ?? [];
     const emailAddresses = primaryRecipient?.contactCard?.emailAddresses ?? [];
 
+    // Calculate balance due (prorated if rate should be higher than what's being paid)
+    let balanceDue = 0;
+
+    // Get the expected rate based on current recipients
+    const rateDate = account.lastRenewalDate ?? account.startDate;
+    const rates = await PricingService.getRatesForDate(rateDate);
+
+    if (rates) {
+      const analysis = PricingService.analyzeRecipients(account.recipients);
+      const breakdown = PricingService.calculatePriceBreakdown(rates, {
+        renewalPeriod: account.renewalPeriod,
+        adultRecipientCount: analysis.adultCount,
+        minorRecipientCount: analysis.minorCount,
+        hasBusinessRecipient: analysis.hasBusinessRecipient,
+      });
+
+      const currentRate = parseFloat(account.currentRate.toString());
+      const expectedRate = breakdown.totalMonthly;
+
+      // If expected rate is higher than stored rate, there's a prorated charge
+      if (expectedRate > currentRate) {
+        const rateDifference = expectedRate - currentRate;
+        const now = new Date();
+        const nextRenewal = new Date(account.nextRenewalDate);
+        const daysRemaining = Math.max(0, Math.ceil((nextRenewal.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+        const dailyRateDifference = rateDifference / 30;
+        balanceDue = Math.round(dailyRateDifference * daysRemaining * 100) / 100; // Round to 2 decimal places
+      }
+
+      // Check for unpaid amounts for the current term
+      // Get payments for current term
+      const termPayments = await prisma.payment.findMany({
+        where: {
+          accountId: account.id,
+          periodStart: { gte: account.startDate },
+          periodEnd: { lte: account.nextRenewalDate },
+        },
+        select: { amount: true },
+      });
+
+      const totalPaid = termPayments.reduce((sum, p) => sum + parseFloat(p.amount.toString()), 0);
+
+      // Calculate total charge for term using stored rate (not expected rate)
+      // This ensures partial payments are properly tracked
+      let termMonths = 3;
+      if (account.renewalPeriod === 'SIX_MONTH') termMonths = 6;
+      else if (account.renewalPeriod === 'TWELVE_MONTH') termMonths = 12;
+
+      const totalCharge = currentRate * termMonths;
+      const unpaidAmount = Math.max(0, totalCharge - totalPaid);
+
+      // Add unpaid amount to balance due
+      balanceDue = Math.round((balanceDue + unpaidAmount) * 100) / 100;
+    }
+
     // Map all recipients with their contact info
     const recipients = account.recipients.map((r) => {
       const recipientPhones = r.contactCard?.phoneNumbers ?? [];
@@ -102,6 +159,7 @@ export async function GET(
       lastRenewalDate: account.lastRenewalDate?.toISOString() ?? null,
       nextRenewalDate: account.nextRenewalDate.toISOString(),
       currentRate: account.currentRate.toString(),
+      balanceDue,
       depositPaid: account.depositPaid.toString(),
       depositReturned: account.depositReturned,
       smsEnabled: account.smsEnabled,
@@ -327,6 +385,22 @@ export async function PATCH(
       }
     }
 
+    // Capture "before" state for proration calculation
+    let beforeAnalysis: { adultCount: number; minorCount: number; hasBusinessRecipient: boolean } | null = null;
+    const recipientsWillChange = Array.isArray(body.recipients) && body.recipients.length > 0;
+
+    if (recipientsWillChange) {
+      const accountBeforeChange = await prisma.account.findUnique({
+        where: { id: params.id },
+        include: {
+          recipients: { where: { removedDate: null } },
+        },
+      });
+      if (accountBeforeChange) {
+        beforeAnalysis = PricingService.analyzeRecipients(accountBeforeChange.recipients);
+      }
+    }
+
     // Handle recipient updates
     if (Array.isArray(body.recipients)) {
       // First, check if any recipient is being promoted to primary
@@ -493,8 +567,20 @@ export async function PATCH(
                 auditedAt: null,
               },
             });
+          } else if (recipientsWillChange && expectedRate > currentRate) {
+            // If recipients changed and rate increased, update the rate
+            // This handles cases like adding a business recipient or additional adults
+            await prisma.account.update({
+              where: { id: params.id },
+              data: {
+                currentRate: expectedRate,
+                auditFlag: false,
+                auditNote: null,
+                auditedAt: null,
+              },
+            });
           } else {
-            // If there's a discrepancy, set the audit flag
+            // If there's an unexplained discrepancy, set the audit flag for manual review
             const auditNote = `Expected: $${expectedRate.toFixed(2)}, Current: $${currentRate.toFixed(2)}. Difference: $${discrepancy.toFixed(2)}`;
             await prisma.account.update({
               where: { id: params.id },
@@ -504,6 +590,83 @@ export async function PATCH(
                 auditedAt: new Date(),
               },
             });
+          }
+
+          // Create proration invoice if recipients changed and fees increased
+          if (beforeAnalysis && recipientsWillChange) {
+            const addedFees: Array<{
+              lineType: CreateInvoiceLineItemInput['lineType'];
+              description: string;
+              monthlyRate: number;
+            }> = [];
+
+            // Check if business fee was added
+            if (!beforeAnalysis.hasBusinessRecipient && analysis.hasBusinessRecipient) {
+              addedFees.push({
+                lineType: 'BUSINESS_FEE',
+                description: 'Business Account Fee',
+                monthlyRate: Number(rates.businessAccountFee),
+              });
+            }
+
+            // Check for additional recipient fees (4th-7th)
+            const beforeAdditional = Math.max(0, beforeAnalysis.adultCount - 3);
+            const afterAdditional = Math.max(0, analysis.adultCount - 3);
+            const additionalFeeTypes: Array<{ type: CreateInvoiceLineItemInput['lineType']; label: string; rateField: keyof typeof rates }> = [
+              { type: 'ADDITIONAL_RECIPIENT_4TH', label: '4th Recipient Fee', rateField: 'rate4thAdult' },
+              { type: 'ADDITIONAL_RECIPIENT_5TH', label: '5th Recipient Fee', rateField: 'rate5thAdult' },
+              { type: 'ADDITIONAL_RECIPIENT_6TH', label: '6th Recipient Fee', rateField: 'rate6thAdult' },
+              { type: 'ADDITIONAL_RECIPIENT_7TH', label: '7th Recipient Fee', rateField: 'rate7thAdult' },
+            ];
+
+            for (let i = beforeAdditional; i < Math.min(afterAdditional, 4); i++) {
+              const feeInfo = additionalFeeTypes[i];
+              if (feeInfo) {
+                addedFees.push({
+                  lineType: feeInfo.type,
+                  description: feeInfo.label,
+                  monthlyRate: Number(rates[feeInfo.rateField]),
+                });
+              }
+            }
+
+            // Check for minor fees added
+            const beforeMinors = beforeAnalysis.minorCount;
+            const afterMinors = analysis.minorCount;
+            if (afterMinors > beforeMinors) {
+              const addedMinors = afterMinors - beforeMinors;
+              addedFees.push({
+                lineType: 'MINOR_FEE',
+                description: `Minor Recipient Fee${addedMinors > 1 ? ` (${addedMinors})` : ''}`,
+                monthlyRate: Number(rates.minorRecipientFee) * addedMinors,
+              });
+            }
+
+            // Create proration invoice if any fees were added
+            // But first check if there's already an unpaid proration invoice for this term
+            if (addedFees.length > 0) {
+              const existingProration = await prisma.invoice.findFirst({
+                where: {
+                  accountId: params.id,
+                  invoiceType: 'PRORATION',
+                  status: { in: ['PENDING', 'PARTIAL'] },
+                  periodEnd: accountAfterUpdate.nextRenewalDate,
+                },
+              });
+
+              // Only create if no existing proration invoice for this term
+              if (!existingProration) {
+                const userId = session?.user?.id ?? null;
+                await InvoiceService.createProrationInvoice(
+                  params.id,
+                  accountAfterUpdate.startDate,
+                  accountAfterUpdate.nextRenewalDate,
+                  accountAfterUpdate.renewalPeriod,
+                  addedFees,
+                  userId
+                );
+              }
+            }
           }
         }
       }

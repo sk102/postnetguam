@@ -46,6 +46,13 @@ export const createPricingSchema = z.object({
 export type CreatePricingInput = z.infer<typeof createPricingSchema>;
 
 /**
+ * Schema for updating a pricing configuration (same fields as create)
+ */
+export const updatePricingSchema = createPricingSchema;
+
+export type UpdatePricingInput = z.infer<typeof updatePricingSchema>;
+
+/**
  * Schema for price calculation input
  */
 export const calculatePricingSchema = z

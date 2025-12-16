@@ -3,12 +3,35 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { AppLayout } from '@/components/layout';
-import { RecipientEditDialog } from '@/components/accounts/RecipientEditDialog';
-import { AccountEditDialog } from '@/components/accounts/AccountEditDialog';
-import { MailboxReassignDialog } from '@/components/accounts/MailboxReassignDialog';
 import { format } from 'date-fns';
 import { formatPhone } from '@/lib/utils/phone';
+import { getAgeInfo } from '@/lib/utils/date';
+import type { PaymentWithDetails } from '@/types/payment';
+
+// Lazy-load dialogs for better initial page load performance
+const RecipientEditDialog = dynamic(
+  () => import('@/components/accounts/RecipientEditDialog').then((mod) => mod.RecipientEditDialog),
+  { ssr: false }
+);
+const AccountEditDialog = dynamic(
+  () => import('@/components/accounts/AccountEditDialog').then((mod) => mod.AccountEditDialog),
+  { ssr: false }
+);
+const MailboxReassignDialog = dynamic(
+  () => import('@/components/accounts/MailboxReassignDialog').then((mod) => mod.MailboxReassignDialog),
+  { ssr: false }
+);
+const RecordPaymentDialog = dynamic(
+  () => import('@/components/payments/RecordPaymentDialog').then((mod) => mod.RecordPaymentDialog),
+  { ssr: false }
+);
+const PaymentHistoryTable = dynamic(
+  () => import('@/components/payments/PaymentHistoryTable').then((mod) => mod.PaymentHistoryTable),
+  { ssr: false }
+);
 
 interface PhoneNumber {
   id: string;
@@ -55,6 +78,7 @@ interface AccountDetail {
   lastRenewalDate: string | null;
   nextRenewalDate: string;
   currentRate: string;
+  balanceDue: number;
   depositPaid: string;
   depositReturned: boolean;
   smsEnabled: boolean;
@@ -210,6 +234,13 @@ function AccountDetailContent(): React.ReactElement {
   const [accountEditOpen, setAccountEditOpen] = useState(false);
   const [mailboxEditOpen, setMailboxEditOpen] = useState(false);
   const [editingRecipientIndex, setEditingRecipientIndex] = useState<number | null>(null);
+  const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
+  const [renewalPaymentOpen, setRenewalPaymentOpen] = useState(false);
+
+  // Payment state
+  const [payments, setPayments] = useState<PaymentWithDetails[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(true); // Start as true since we fetch on mount
+  const [paymentsExpanded, setPaymentsExpanded] = useState(false);
   const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(null);
 
   // Recipients state for managing additions/deletions
@@ -270,25 +301,48 @@ function AccountDetailContent(): React.ReactElement {
     }
   }, [accountId]);
 
-  useEffect(() => {
-    void fetchAccount();
-  }, [fetchAccount]);
-
-  // Fetch notice types on mount
-  useEffect(() => {
-    const fetchNoticeTypes = async (): Promise<void> => {
-      try {
-        const res = await fetch('/api/notices/types');
-        if (res.ok) {
-          const data = await res.json() as { data: NoticeType[] };
-          setNoticeTypes(data.data);
-        }
-      } catch {
-        // Silently fail - notices are optional
+  const fetchPayments = useCallback(async () => {
+    setPaymentsLoading(true);
+    try {
+      const res = await fetch(`/api/accounts/${accountId}/payments`);
+      if (res.ok) {
+        const data = await res.json() as { data: PaymentWithDetails[] };
+        setPayments(data.data);
       }
+    } catch {
+      // Silently fail - payments are optional
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }, [accountId]);
+
+  // Fetch account, payments, and notice types in parallel on mount
+  useEffect(() => {
+    const fetchData = async (): Promise<void> => {
+      // Fetch all in parallel for better performance
+      const [accountResult] = await Promise.allSettled([
+        fetchAccount(),
+        fetchPayments(),
+        (async () => {
+          try {
+            const res = await fetch('/api/notices/types');
+            if (res.ok) {
+              const data = await res.json() as { data: NoticeType[] };
+              setNoticeTypes(data.data);
+            }
+          } catch {
+            // Silently fail - notices are optional
+          }
+        })(),
+      ]);
+      // Account fetch errors are handled inside fetchAccount
+      void accountResult;
     };
-    void fetchNoticeTypes();
-  }, []);
+    void fetchData();
+  }, [fetchAccount, fetchPayments]);
+
+  // Balance due is calculated by the API (includes prorated charges for rate changes)
+  const balanceDue = account?.balanceDue ?? 0;
 
   // Generate a notice and open PDF
   const generateNotice = async (noticeTypeCode: string, recipientIds?: string[]): Promise<void> => {
@@ -732,9 +786,9 @@ function AccountDetailContent(): React.ReactElement {
           </div>
         </div>
 
-        {/* Quick Actions - Generate Notices */}
-        {noticeTypes.length > 0 && (() => {
-          // Calculate which notices are applicable
+        {/* Quick Actions - Generate Notices and Renewal */}
+        {(() => {
+          // Calculate which actions are applicable
           const isHold = account.status === 'HOLD';
 
           // Check if renewal is within 30 days
@@ -743,20 +797,17 @@ function AccountDetailContent(): React.ReactElement {
           const daysUntilRenewal = Math.ceil((renewalDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
           const isRenewalSoon = account.status === 'ACTIVE' && daysUntilRenewal >= 0 && daysUntilRenewal <= 30;
 
+          // Renewal is available for HOLD or accounts approaching renewal
+          const canRenew = isHold || isRenewalSoon;
+
           // Find adult recipients (18+) without ID verification
           const adultRecipientsWithoutId = recipients
             .filter((r) => !r._delete && r.recipientType === 'PERSON')
             .filter((r) => {
-              // Check if adult
+              // Check if adult using getAgeInfo utility
               if (!r.birthdate) return true; // No birthdate means treat as adult
-              const birth = new Date(r.birthdate);
-              const today = new Date();
-              let age = today.getFullYear() - birth.getFullYear();
-              const monthDiff = today.getMonth() - birth.getMonth();
-              if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-                age--;
-              }
-              return age >= 18;
+              const ageInfo = getAgeInfo(r.birthdate);
+              return !ageInfo.isMinor;
             })
             .filter((r) => !r.idVerifiedDate);
 
@@ -771,16 +822,30 @@ function AccountDetailContent(): React.ReactElement {
               return daysUntil > 0 && daysUntil <= 30;
             });
 
-          const hasApplicableNotices = isHold || isRenewalSoon || adultRecipientsWithoutId.length > 0 || recipientsWithExpiringId.length > 0;
+          const hasApplicableNotices = noticeTypes.length > 0 && (isHold || isRenewalSoon || adultRecipientsWithoutId.length > 0 || recipientsWithExpiringId.length > 0);
+          const hasQuickActions = canRenew || hasApplicableNotices;
 
-          if (!hasApplicableNotices) return null;
+          if (!hasQuickActions) return null;
 
           return (
             <div className="rounded-lg border bg-white p-6 lg:col-span-2">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
               <div className="flex flex-wrap gap-2">
+                {/* Renew Account - for HOLD or renewal due soon */}
+                {canRenew && (
+                  <button
+                    onClick={() => setRenewalPaymentOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    Renew Account
+                  </button>
+                )}
+
                 {/* Hold Notice - for HOLD status */}
-                {isHold && (
+                {isHold && hasApplicableNotices && (
                   <button
                     onClick={() => void generateNotice('HOLD_NOTICE')}
                     disabled={generatingNotice !== null}
@@ -801,7 +866,7 @@ function AccountDetailContent(): React.ReactElement {
                 )}
 
                 {/* Renewal Notice - for accounts with renewal within 30 days */}
-                {isRenewalSoon && (
+                {isRenewalSoon && hasApplicableNotices && (
                   <button
                     onClick={() => void generateNotice('RENEWAL_NOTICE')}
                     disabled={generatingNotice !== null}
@@ -822,7 +887,7 @@ function AccountDetailContent(): React.ReactElement {
                 )}
 
                 {/* Missing ID Notice - for recipients without ID */}
-                {adultRecipientsWithoutId.length > 0 && (
+                {adultRecipientsWithoutId.length > 0 && hasApplicableNotices && (
                   <button
                     onClick={() => void generateNotice('MISSING_ID', adultRecipientsWithoutId.map((r) => r.id).filter((id): id is string => !!id))}
                     disabled={generatingNotice !== null}
@@ -843,7 +908,7 @@ function AccountDetailContent(): React.ReactElement {
                 )}
 
                 {/* ID Verification Request - for expiring IDs */}
-                {recipientsWithExpiringId.length > 0 && (
+                {recipientsWithExpiringId.length > 0 && hasApplicableNotices && (
                   <button
                     onClick={() => void generateNotice('ID_VERIFICATION_REQUEST', recipientsWithExpiringId.map((r) => r.id).filter((id): id is string => !!id))}
                     disabled={generatingNotice !== null}
@@ -967,10 +1032,10 @@ function AccountDetailContent(): React.ReactElement {
             <button
               type="button"
               onClick={() => addRecipient('PERSON')}
-              className="text-xs text-postnet-red hover:underline"
+              className="flex items-center gap-1 text-sm text-postnet-red hover:text-postnet-red-dark bg-white px-2 py-1 rounded-md border border-gray-200 shadow-sm hover:shadow"
               disabled={saving}
             >
-              Add New
+              <Plus className="h-4 w-4" /> Add
             </button>
           </div>
           {recipients.filter((r) => !r._delete && !r.isPrimary).length > 0 ? (
@@ -1010,23 +1075,10 @@ function AccountDetailContent(): React.ReactElement {
                   let turningAdultSoon = false;
                   let personAge: number | null = null;
                   if (recipient.recipientType === 'PERSON' && recipient.birthdate) {
-                    const birth = new Date(recipient.birthdate);
-                    const today = new Date();
-                    let age = today.getFullYear() - birth.getFullYear();
-                    const monthDiff = today.getMonth() - birth.getMonth();
-                    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-                      age--;
-                    }
-                    personAge = age;
-                    isMinor = age < 18;
-
-                    // Check if 18th birthday is within 30 days
-                    if (isMinor) {
-                      const eighteenthBirthday = new Date(birth);
-                      eighteenthBirthday.setFullYear(birth.getFullYear() + 18);
-                      const daysUntil18 = Math.ceil((eighteenthBirthday.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                      turningAdultSoon = daysUntil18 > 0 && daysUntil18 <= 30;
-                    }
+                    const ageInfo = getAgeInfo(recipient.birthdate);
+                    personAge = ageInfo.age;
+                    isMinor = ageInfo.isMinor;
+                    turningAdultSoon = ageInfo.isTurningAdultSoon;
                   }
 
                   // Determine row background color
@@ -1125,19 +1177,20 @@ function AccountDetailContent(): React.ReactElement {
                         <button
                           type="button"
                           onClick={() => setEditingRecipientIndex(actualIndex)}
-                          className="px-1 sm:px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                          aria-label="Edit recipient"
                           disabled={saving}
                         >
-                          Edit
+                          <Pencil className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
                           onClick={() => setDeleteConfirmIndex(actualIndex)}
-                          className="px-1 sm:px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
                           aria-label="Delete recipient"
                           disabled={saving}
                         >
-                          Del
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </span>
                     </div>
@@ -1147,6 +1200,63 @@ function AccountDetailContent(): React.ReactElement {
             </div>
           ) : (
             <p className="text-sm text-gray-400 italic">No additional recipients</p>
+          )}
+        </div>
+
+        {/* Payments Section - Collapsible */}
+        <div className="rounded-lg border bg-white p-6 lg:col-span-2">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setPaymentsExpanded(!paymentsExpanded)}
+              className="flex items-center gap-2 text-lg font-semibold text-gray-900 hover:text-gray-700"
+            >
+              <svg
+                className={`h-5 w-5 transition-transform ${paymentsExpanded ? 'rotate-90' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+              </svg>
+              Payments
+              {account.mailbox.status === 'RESERVED' && (
+                <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+                  Awaiting First Payment
+                </span>
+              )}
+            </button>
+            {balanceDue > 0 && (
+              <button
+                type="button"
+                onClick={() => setRecordPaymentOpen(true)}
+                className="inline-flex items-center gap-1 rounded-md bg-postnet-red px-3 py-1.5 text-sm font-medium text-white hover:bg-postnet-red-dark"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Record Payment
+              </button>
+            )}
+          </div>
+
+          {paymentsExpanded && (
+            <div className="mt-4 pt-4 border-t">
+              {paymentsLoading ? (
+                <div className="animate-pulse space-y-3">
+                  <div className="h-10 bg-gray-200 rounded"></div>
+                  <div className="h-10 bg-gray-200 rounded"></div>
+                  <div className="h-10 bg-gray-200 rounded"></div>
+                </div>
+              ) : payments.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No payments recorded yet
+                </div>
+              ) : (
+                <PaymentHistoryTable payments={payments} loading={false} />
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -1183,6 +1293,33 @@ function AccountDetailContent(): React.ReactElement {
         recipient={editingRecipientIndex !== null ? recipients[editingRecipientIndex] ?? null : null}
         onClose={() => setEditingRecipientIndex(null)}
         onSave={handleRecipientSave}
+      />
+
+      {/* Record Payment Dialog */}
+      <RecordPaymentDialog
+        isOpen={recordPaymentOpen}
+        accountId={accountId}
+        onClose={() => setRecordPaymentOpen(false)}
+        onSuccess={() => {
+          void fetchPayments();
+          void fetchAccount();
+          setSuccessMessage('Payment recorded successfully');
+          setTimeout(() => setSuccessMessage(null), 3000);
+        }}
+      />
+
+      {/* Renewal Payment Dialog */}
+      <RecordPaymentDialog
+        isOpen={renewalPaymentOpen}
+        accountId={accountId}
+        isRenewal={true}
+        onClose={() => setRenewalPaymentOpen(false)}
+        onSuccess={() => {
+          void fetchPayments();
+          void fetchAccount();
+          setSuccessMessage('Renewal payment recorded successfully');
+          setTimeout(() => setSuccessMessage(null), 3000);
+        }}
       />
 
       {/* Delete Confirmation Dialog */}
