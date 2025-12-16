@@ -1,0 +1,182 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Slab:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* PostNet branded theme with glassmorphism support */
+    --background: 0 0% 98%;
+    --foreground: 0 0% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 12%;
+    /* PostNet Red as primary */
+    --primary: 349 85% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 12%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 349 85% 95%;
+    --accent-foreground: 349 85% 35%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 349 85% 42%;
+    --chart-1: 349 85% 42%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.625rem;
+
+    /* Glassmorphism variables */
+    --glass-blur: 16px;
+    --glass-opacity: 0.75;
+    --glass-border-opacity: 0.2;
+    --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+  }
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 0 0% 98%;
+    --card: 222 47% 11%;
+    --card-foreground: 0 0% 98%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 349 85% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 47% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 222 47% 15%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 222 47% 20%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 222 47% 18%;
+    --input: 222 47% 18%;
+    --ring: 349 85% 55%;
+    --chart-1: 349 85% 55%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+    /* Dark mode glass variables */
+    --glass-blur: 20px;
+    --glass-opacity: 0.15;
+    --glass-border-opacity: 0.1;
+    --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Glassmorphism utility classes */
+@layer components {
+  .glass {
+    @apply relative bg-white/75 dark:bg-white/10;
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid rgba(255, 255, 255, var(--glass-border-opacity));
+    box-shadow: var(--glass-shadow);
+  }
+
+  .glass-card {
+    @apply glass rounded-xl;
+  }
+
+  .glass-subtle {
+    @apply relative bg-white/50 dark:bg-white/5;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-strong {
+    @apply relative bg-white/90 dark:bg-white/20;
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 12px 48px 0 rgba(31, 38, 135, 0.2);
+  }
+
+  .glass-dark {
+    @apply relative bg-gray-900/75 text-white;
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: var(--glass-shadow);
+  }
+
+  /* Glass button variant */
+  .btn-glass {
+    @apply glass px-4 py-2 rounded-lg font-medium;
+    @apply hover:bg-white/85 dark:hover:bg-white/15;
+    @apply active:scale-[0.98] transition-all duration-150;
+  }
+
+  /* Glass input variant */
+  .input-glass {
+    @apply glass rounded-lg px-4 py-2;
+    @apply focus:ring-2 focus:ring-primary/30 focus:outline-none;
+    @apply placeholder:text-muted-foreground/60;
+  }
+
+  /* Gradient backgrounds for glass effect showcase */
+  .bg-gradient-glass {
+    background: linear-gradient(135deg,
+      hsl(349 85% 42% / 0.1) 0%,
+      hsl(222 47% 50% / 0.1) 50%,
+      hsl(280 65% 60% / 0.1) 100%
+    );
+  }
+
+  /* PostNet branded button with skew effect */
+  .btn-postnet {
+    @apply relative inline-flex items-center justify-center px-8 py-3 overflow-hidden;
+    @apply font-medium uppercase tracking-wider text-white;
+    @apply transition-all duration-200;
+    font-family: 'Roboto', sans-serif;
+    letter-spacing: 1.5px;
+  }
+
+  .btn-postnet::before {
+    content: '';
+    @apply absolute inset-0 bg-postnet-red;
+    transform: skewX(-13deg);
+    transition: background-color 0.2s ease;
+  }
+
+  .btn-postnet:hover::before {
+    @apply bg-postnet-red-dark;
+  }
+
+  .btn-postnet span {
+    @apply relative z-10;
+  }
+
+  .btn-postnet:disabled::before {
+    @apply bg-postnet-gray;
+  }
+
+  /* PostNet typography */
+  .font-roboto {
+    font-family: 'Roboto', sans-serif;
+  }
+
+  .font-roboto-slab {
+    font-family: 'Roboto Slab', serif;
+  }
+}

@@ -1,0 +1,575 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum MailboxStatus {
+  AVAILABLE
+  ACTIVE
+  HOLD
+  CLOSED
+}
+
+enum AccountStatus {
+  ACTIVE
+  HOLD
+  CLOSED
+}
+
+enum RenewalPeriod {
+  THREE_MONTH
+  SIX_MONTH
+  TWELVE_MONTH
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  CHECK
+}
+
+enum RecipientType {
+  PERSON
+  BUSINESS
+}
+
+enum ReminderType {
+  RENEWAL
+  OVERDUE
+  AGE_18
+  ID_EXPIRY
+  BUSINESS_EXPIRY
+  CUSTOM
+}
+
+enum UserRole {
+  STAFF
+  MANAGER
+}
+
+enum AuditFlagType {
+  UNDERCHARGED
+  OVERCHARGED
+  RECIPIENT_OVERFLOW
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum SmsStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum NoticeTypeCode {
+  RENEWAL_NOTICE
+  UPCOMING_18TH_BIRTHDAY
+  BIRTHDAY
+  HOLD_NOTICE
+  ID_VERIFICATION_REQUEST
+  MISSING_ID
+  CUSTOM
+}
+
+enum NoticeDeliveryMethod {
+  PRINT
+  EMAIL
+  BOTH
+}
+
+enum NoticeStatus {
+  GENERATED
+  SENT
+  FAILED
+}
+
+// ============================================================
+// MODELS
+// ============================================================
+
+model Mailbox {
+  id        String        @id @default(uuid())
+  number    Int           @unique
+  status    MailboxStatus @default(AVAILABLE)
+  keyDeposit Decimal      @default(5.00) @map("key_deposit") @db.Decimal(10, 2)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  accounts Account[]
+
+  @@map("mailboxes")
+}
+
+model Account {
+  id              String        @id @default(uuid())
+  mailboxId       String        @map("mailbox_id")
+  status          AccountStatus @default(ACTIVE)
+  renewalPeriod   RenewalPeriod @map("renewal_period")
+  startDate       DateTime      @map("start_date") @db.Date
+  lastRenewalDate DateTime?     @map("last_renewal_date") @db.Date
+  nextRenewalDate DateTime      @map("next_renewal_date") @db.Date
+  currentRate     Decimal       @map("current_rate") @db.Decimal(10, 2)
+  depositPaid     Decimal       @map("deposit_paid") @db.Decimal(10, 2)
+  depositReturned Boolean       @default(false) @map("deposit_returned")
+  smsEnabled      Boolean       @default(false) @map("sms_enabled")
+  smsPhone        String?       @map("sms_phone")
+  emailEnabled    Boolean       @default(false) @map("email_enabled")
+  closedAt        DateTime?     @map("closed_at")
+  closureReason   String?       @map("closure_reason")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Rate override (manager approval for non-standard rates)
+  rateOverride       Boolean   @default(false) @map("rate_override")
+  rateOverrideById   String?   @map("rate_override_by_id")
+  rateOverrideAt     DateTime? @map("rate_override_at")
+  rateOverrideReason String?   @map("rate_override_reason")
+
+  // Audit fields
+  auditFlag     Boolean        @default(false) @map("audit_flag")
+  auditFlagType AuditFlagType? @map("audit_flag_type")
+  auditNote     String?        @map("audit_note")
+  auditedAt     DateTime?      @map("audited_at")
+
+  mailbox        Mailbox     @relation(fields: [mailboxId], references: [id])
+  rateOverrideBy User?       @relation("RateOverrideBy", fields: [rateOverrideById], references: [id])
+  recipients     Recipient[]
+  payments       Payment[]
+  reminders      Reminder[]
+  smsLogs        SmsLog[]
+  memos          Memo[]
+  notices        NoticeHistory[]
+
+  @@index([mailboxId])
+  @@index([status])
+  @@index([nextRenewalDate])
+  @@index([auditFlag])
+  @@map("accounts")
+}
+
+model Recipient {
+  id            String        @id @default(uuid())
+  accountId     String        @map("account_id")
+  isPrimary     Boolean       @default(false) @map("is_primary")
+  recipientType RecipientType @default(PERSON) @map("recipient_type")
+
+  // Person Fields (used when recipientType = PERSON)
+  firstName   String?   @map("first_name")
+  middleName  String?   @map("middle_name")
+  lastName    String?   @map("last_name")
+  personAlias String?   @map("person_alias")
+  birthdate   DateTime? @map("birthdate") @db.Date
+
+  // Business Fields (used when recipientType = BUSINESS)
+  businessName      String?   @map("business_name")
+  businessAlias     String?   @map("business_alias")
+  businessRegNumber String?   @map("business_reg_number")
+  validUntilDate    DateTime? @map("valid_until_date") @db.Date
+
+  // ID Document (primarily for Person recipients)
+  idType           String?   @map("id_type")
+  idStateCountry   String?   @map("id_state_country")
+  idExpirationDate DateTime? @map("id_expiration_date") @db.Date
+  idVerifiedDate   DateTime? @map("id_verified_date") @db.Date
+  idVerifiedBy     String?   @map("id_verified_by")
+
+  // Proof of Residence (primarily for Person recipients)
+  porType         String?   @map("por_type")
+  porDateProvided DateTime? @map("por_date_provided") @db.Date
+  porVerifiedBy   String?   @map("por_verified_by")
+
+  // USPS Form 1583
+  form1583SignedDate DateTime? @map("form_1583_signed_date") @db.Date
+  form1583Notarized  Boolean   @default(false) @map("form_1583_notarized")
+
+  // Status
+  addedDate     DateTime  @default(now()) @map("added_date") @db.Date
+  removedDate   DateTime? @map("removed_date") @db.Date
+  removalReason String?   @map("removal_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  account           Account      @relation(fields: [accountId], references: [id])
+  contactCard       ContactCard?
+  reminders         Reminder[]
+  idVerifiedByUser  User?        @relation("IdVerifier", fields: [idVerifiedBy], references: [id])
+  porVerifiedByUser User?        @relation("PorVerifier", fields: [porVerifiedBy], references: [id])
+  notices           NoticeHistory[]
+
+  @@index([accountId])
+  @@index([recipientType])
+  @@index([lastName, firstName])
+  @@index([businessName])
+  @@index([idExpirationDate])
+  @@index([birthdate])
+  @@index([validUntilDate])
+  @@map("recipients")
+}
+
+model ContactCard {
+  id          String @id @default(uuid())
+  recipientId String @unique @map("recipient_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  recipient      Recipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  phoneNumbers   PhoneNumber[]
+  emailAddresses EmailAddress[]
+
+  @@map("contact_cards")
+}
+
+model PhoneNumber {
+  id            String @id @default(uuid())
+  contactCardId String @map("contact_card_id")
+
+  // Phone number stored in E.164 format only (e.g., +16715551234)
+  e164Format String @map("e164_format")
+
+  // Phone type and flags
+  isMobile  Boolean @default(false) @map("is_mobile")
+  isPrimary Boolean @default(false) @map("is_primary")
+
+  // Label (e.g., "Work", "Home", "Cell", "Office", "Fax")
+  label String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contactCard ContactCard @relation(fields: [contactCardId], references: [id], onDelete: Cascade)
+
+  @@index([contactCardId])
+  @@index([e164Format])
+  @@map("phone_numbers")
+}
+
+model EmailAddress {
+  id            String @id @default(uuid())
+  contactCardId String @map("contact_card_id")
+
+  // Email address (stored lowercase, validated format)
+  email String
+
+  // Flags
+  isPrimary Boolean @default(false) @map("is_primary")
+
+  // Label (e.g., "Personal", "Work", "Business")
+  label String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contactCard ContactCard @relation(fields: [contactCardId], references: [id], onDelete: Cascade)
+
+  @@index([contactCardId])
+  @@index([email])
+  @@map("email_addresses")
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  accountId     String        @map("account_id")
+  amount        Decimal       @db.Decimal(10, 2)
+  paymentDate   DateTime      @map("payment_date") @db.Date
+  paymentMethod PaymentMethod @map("payment_method")
+  periodStart   DateTime      @map("period_start") @db.Date
+  periodEnd     DateTime      @map("period_end") @db.Date
+  notes         String?       @db.Text
+  recordedBy    String        @map("recorded_by")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  account        Account @relation(fields: [accountId], references: [id])
+  recordedByUser User    @relation(fields: [recordedBy], references: [id])
+
+  @@index([accountId])
+  @@index([paymentDate])
+  @@map("payments")
+}
+
+model Reminder {
+  id          String       @id @default(uuid())
+  accountId   String?      @map("account_id")
+  recipientId String?      @map("recipient_id")
+  type        ReminderType
+  triggerDate DateTime     @map("trigger_date") @db.Date
+  message     String       @db.Text
+  isDismissed Boolean      @default(false) @map("is_dismissed")
+  dismissedBy String?      @map("dismissed_by")
+  dismissedAt DateTime?    @map("dismissed_at")
+  createdBy   String?      @map("created_by")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  account   Account?   @relation(fields: [accountId], references: [id])
+  recipient Recipient? @relation(fields: [recipientId], references: [id])
+  creator   User?      @relation("ReminderCreator", fields: [createdBy], references: [id])
+  dismisser User?      @relation("ReminderDismisser", fields: [dismissedBy], references: [id])
+
+  @@index([triggerDate])
+  @@index([type])
+  @@map("reminders")
+}
+
+model SmsLog {
+  id             String    @id @default(uuid())
+  accountId      String    @map("account_id")
+  messageType    String    @map("message_type")
+  recipientPhone String    @map("recipient_phone")
+  messageBody    String    @map("message_body") @db.Text
+  twilioSid      String?   @map("twilio_sid")
+  status         SmsStatus @default(QUEUED)
+  errorMessage   String?   @map("error_message")
+  sentAt         DateTime? @map("sent_at")
+  statusUpdated  DateTime? @map("status_updated")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([accountId])
+  @@index([status])
+  @@map("sms_logs")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  firstName    String?   @map("first_name")
+  middleName   String?   @map("middle_name")
+  lastName     String?   @map("last_name")
+  role         UserRole  @default(STAFF)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLogin    DateTime? @map("last_login")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  payments           Payment[]
+  auditLogs          AuditLog[]
+  createdReminders   Reminder[]          @relation("ReminderCreator")
+  dismissedReminders Reminder[]          @relation("ReminderDismisser")
+  idVerifications    Recipient[]         @relation("IdVerifier")
+  porVerifications   Recipient[]         @relation("PorVerifier")
+  createdMemos       Memo[]              @relation("MemoCreator")
+  updatedMemos       Memo[]              @relation("MemoUpdater")
+  deletedMemos       Memo[]              @relation("MemoDeleter")
+  createdRates       RateHistory[]
+  rateOverrides      Account[]           @relation("RateOverrideBy")
+  phoneNumbers       UserPhoneNumber[]
+  emailAddresses     UserEmailAddress[]
+
+  // Notice relations
+  createdNoticeTypes  NoticeType[]    @relation("NoticeTypeCreator")
+  updatedNoticeTypes  NoticeType[]    @relation("NoticeTypeUpdater")
+  generatedNotices    NoticeHistory[] @relation("NoticeGenerator")
+
+  // Store settings
+  storeSettingsUpdates StoreSettings[] @relation("StoreSettingsUpdater")
+
+  @@map("users")
+}
+
+model UserPhoneNumber {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  e164Format String   @map("e164_format")
+  isMobile   Boolean  @default(false) @map("is_mobile")
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_phone_numbers")
+}
+
+model UserEmailAddress {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  email     String
+  isPrimary Boolean  @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_email_addresses")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  userId     String?     @map("user_id")
+  userName   String      @map("user_name")
+  action     AuditAction
+  entityType String      @map("entity_type")
+  entityId   String      @map("entity_id")
+  changes    Json?       @db.JsonB
+  ipAddress  String?     @map("ip_address")
+  userAgent  String?     @map("user_agent") @db.Text
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+model Memo {
+  id        String @id @default(uuid())
+  accountId String @map("account_id")
+
+  // Memo content
+  content String @db.Text
+
+  // Who created/modified this memo
+  createdById String  @map("created_by_id")
+  updatedById String? @map("updated_by_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Soft delete (only managers can delete)
+  deletedAt   DateTime? @map("deleted_at")
+  deletedById String?   @map("deleted_by_id")
+
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("MemoCreator", fields: [createdById], references: [id])
+  updatedBy User?   @relation("MemoUpdater", fields: [updatedById], references: [id])
+  deletedBy User?   @relation("MemoDeleter", fields: [deletedById], references: [id])
+
+  @@index([accountId])
+  @@index([createdAt])
+  @@map("memos")
+}
+
+model RateHistory {
+  id            String    @id @default(uuid())
+  startDate     DateTime  @map("start_date") @db.Date
+  endDate       DateTime? @map("end_date") @db.Date // null = current effective rate
+  baseRate3mo   Decimal   @map("base_rate_3mo") @db.Decimal(10, 2)
+  baseRate6mo   Decimal   @map("base_rate_6mo") @db.Decimal(10, 2)
+  baseRate12mo  Decimal   @map("base_rate_12mo") @db.Decimal(10, 2)
+  rate4thAdult  Decimal   @map("rate_4th_adult") @db.Decimal(10, 2)
+  rate5thAdult  Decimal   @map("rate_5th_adult") @db.Decimal(10, 2)
+  rate6thAdult  Decimal   @map("rate_6th_adult") @db.Decimal(10, 2)
+  rate7thAdult  Decimal   @map("rate_7th_adult") @db.Decimal(10, 2)
+  keyDeposit    Decimal   @map("key_deposit") @db.Decimal(10, 2)
+
+  // Additional fee types
+  businessAccountFee Decimal @map("business_account_fee") @db.Decimal(10, 2)
+  minorRecipientFee  Decimal @map("minor_recipient_fee") @db.Decimal(10, 2)
+
+  // Audit trail
+  createdById String?  @map("created_by_id")
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy User? @relation(fields: [createdById], references: [id])
+
+  @@index([startDate])
+  @@index([endDate])
+  @@map("rate_history")
+}
+
+model NoticeType {
+  id          String         @id @default(uuid())
+  code        NoticeTypeCode @unique
+  name        String
+  description String?        @db.Text
+  template    String         @db.Text
+  subject     String?        // Email subject template
+  isActive    Boolean        @default(true) @map("is_active")
+  isSystem    Boolean        @default(false) @map("is_system") // System templates cannot be deleted
+
+  createdById String?   @map("created_by_id")
+  updatedById String?   @map("updated_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  createdBy User? @relation("NoticeTypeCreator", fields: [createdById], references: [id])
+  updatedBy User? @relation("NoticeTypeUpdater", fields: [updatedById], references: [id])
+  notices   NoticeHistory[]
+
+  @@index([code])
+  @@index([isActive])
+  @@map("notice_types")
+}
+
+model NoticeHistory {
+  id            String               @id @default(uuid())
+  noticeTypeId  String               @map("notice_type_id")
+  accountId     String               @map("account_id")
+  recipientId   String?              @map("recipient_id")
+
+  // Rendered content at time of generation
+  renderedSubject String?            @map("rendered_subject")
+  renderedContent String             @map("rendered_content") @db.Text
+
+  // Delivery info
+  deliveryMethod NoticeDeliveryMethod @map("delivery_method")
+  status         NoticeStatus         @default(GENERATED)
+  emailAddress   String?              @map("email_address")
+  sentAt         DateTime?            @map("sent_at")
+  errorMessage   String?              @map("error_message") @db.Text
+
+  // Variable snapshot for debugging/audit
+  variableSnapshot Json?             @map("variable_snapshot") @db.JsonB
+
+  // Audit
+  generatedById String?              @map("generated_by_id")
+  generatedAt   DateTime             @default(now()) @map("generated_at")
+
+  noticeType  NoticeType @relation(fields: [noticeTypeId], references: [id])
+  account     Account    @relation(fields: [accountId], references: [id])
+  recipient   Recipient? @relation(fields: [recipientId], references: [id])
+  generatedBy User?      @relation("NoticeGenerator", fields: [generatedById], references: [id])
+
+  @@index([noticeTypeId])
+  @@index([accountId])
+  @@index([recipientId])
+  @@index([status])
+  @@index([generatedAt])
+  @@map("notice_history")
+}
+
+model StoreSettings {
+  id      String  @id @default(uuid())
+  name    String
+  street1 String  @map("street_1")
+  street2 String? @map("street_2")
+  city    String
+  zip     String
+  phone   String
+  email   String
+  hours   String
+
+  // Audit trail
+  updatedById String?  @map("updated_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  updatedBy User? @relation("StoreSettingsUpdater", fields: [updatedById], references: [id])
+
+  @@map("store_settings")
+}
